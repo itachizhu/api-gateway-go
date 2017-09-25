@@ -8,28 +8,17 @@ import (
 	_ "github.com/itachizhu/api-gateway-go/repository"
 	"github.com/itachizhu/api-gateway-go/util"
 	"github.com/itachizhu/api-gateway-go/model"
-	"io"
-	"io/ioutil"
-	"bytes"
-	"mime/multipart"
-	"os"
 )
 
 const (
-	MethodGet     = "GET"
-	MethodPost    = "POST"
-	MethodPut     = "PUT"
-	MethodDelete  = "DELETE"
-	MethodConnect = "CONNECT"
-	MethodHead    = "HEAD"
-	MethodPatch   = "PATCH"
-	MethodOptions = "OPTIONS"
-	MethodTrace   = "TRACE"
+	text = "Text"
+	image = "Image"
+	upstream = "Upload"
+	downstream = "Download"
 )
 
 type ProxyService interface {
 	verifyRequest(r *http.Request)
-	makeRequestBody(r *http.Request) io.Reader
 	Proxy(proxyType string, appName string, r *http.Request) (*http.Response, int32)
 }
 
@@ -37,6 +26,7 @@ type BaseProxyService struct {
 	ProxyService
 	free    bool
 	cache   bool
+	serviceType string
 	service *model.Service
 }
 
@@ -59,41 +49,24 @@ type UpstreamProxyService struct {
 func (p *BaseProxyService) Proxy(proxyType string, appName string, r *http.Request) (*http.Response, int32) {
 	p.ProxyService.verifyRequest(r)
 	p.formatUri(appName, strings.Replace(r.URL.Path, "/mcloud/mag/"+proxyType, "", 1))
+	p.verify(r)
+	p.fromCache(r)
 	request := p.makeRequest(r)
+	//defer request.Body.Close()
+	defer func() {
+		if request != nil && request.Body != nil {
+			request.Body.Close()
+		}
+	}()
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
-		util.Panic(3002, "转发请求失败:" + err.Error())
+		util.Panic(3002, "转发请求失败:"+err.Error())
 	}
-	/*
-	body, err := ioutil.ReadAll(response.Body)
-	if err != nil {
-		util.Panic(3002, "读取response body失败:" + err.Error())
-	}
-	*/
 	return response, p.service.NeedHeaders
 }
 
-func (p *BaseProxyService) makeRequestBody(r *http.Request) io.Reader {
-	return nil
-}
-
 func (p *BaseProxyService) makeRequest(r *http.Request) *http.Request {
-	request, err := http.NewRequest(r.Method, p.service.ServiceUri + formatQueryString(r), p.ProxyService.makeRequestBody(r))
-	if err != nil {
-		util.Panic(3002, "创建http request失败:" + err.Error())
-	}
-	request.Header = r.Header
-
-	request.Header.Del("Content-Length")
-	request.Header.Del("Connection")
-	request.Header.Del("Origin")
-	request.Header.Del("Cookie")
-	request.Header.Del("User-Agent")
-	for key, value := range request.Header {
-		log.Printf("%v : %v", key, value)
-	}
-
-	return request
+	return CreateRequest(p.serviceType).SetRequest(r).SetUri(p.service.ServiceUri+formatQueryString(r)).Build()
 }
 
 func formatQueryString(r *http.Request) string {
@@ -117,91 +90,40 @@ func (p *BaseProxyService) formatUri(appName string, uri string) {
 }
 
 func (p *BaseProxyService) verifyRequest(r *http.Request) {
-	log.Printf("BaseProxyService")
+	log.Printf("BaseProxyService.verifyRequest")
 }
 
-func (p *TextProxyService) verifyRequest(r *http.Request) {
-	//panic("我故意的")
-	log.Printf("TextProxyService")
+func (p *BaseProxyService) verify(r *http.Request) {
+	log.Printf("BaseProxyService.verify")
 }
 
-func (p *TextProxyService) makeRequestBody(r *http.Request) io.Reader {
-	log.Printf("我进来了")
-	if strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "application/x-www-form-urlencoded") {
-		r.ParseForm()
-		if len(r.PostForm) > 0 {
-			return strings.NewReader(strings.TrimSpace(r.PostForm.Encode()))
-		}
-	} else {
-		defer r.Body.Close()
-		body, err := ioutil.ReadAll(r.Body)
-		log.Printf("%v", string(body))
-		if err == nil && body != nil {
-			return bytes.NewReader(body)
-		}
-	}
-	return nil
+func (p *BaseProxyService) fromCache(r *http.Request) {
+	log.Printf("BaseProxyService.fromCache")
 }
 
 func (p *ImageProxyService) verifyRequest(r *http.Request) {
 	log.Printf("ImageProxyService")
-	//panic("我故意的")
+	if strings.ToUpper(r.Method) != strings.ToUpper(http.MethodGet) {
+		util.Panic(1015, "目前此类请求不支持此种method。")
+	}
 }
 
-func (p *UpstreamProxyService) makeRequestBody(r *http.Request) io.Reader {
-	r.ParseMultipartForm(10<<20)
-	if len(r.MultipartForm.File) + len(r.MultipartForm.Value) > 0 {
-		buffer := new(bytes.Buffer)
-		w := multipart.NewWriter(buffer)
-		defer func() {
-			err := w.Close()
-			if err != nil {
-				util.Panic(3002, "关闭multipart流失败：" + err.Error())
-			}
-		}()
-
-		file, err := os.Open("/Users/itachi/Downloads/apktool.txt")
-		if err != nil {
-			util.Panic(3002, "用户上传的文件打开失败：" + err.Error())
-		}
-		defer file.Close()
-		part, err := w.CreateFormFile("file", "apktool.txt")
-		if err != nil {
-			util.Panic(3002, "文件part创建失败：" + err.Error())
-		}
-		_, err = io.Copy(part, file)
-		if err != nil {
-			util.Panic(3002, "文件转字节传递异常：" + err.Error())
-		}
-		/*
-		for key, files := range r.MultipartForm.File {
-			for _, file := range files {
-				part, err := w.CreateFormFile(key, file.Filename)
-				if err != nil {
-					util.Panic(3002, "文件part创建失败：" + err.Error())
-				}
-				f, err := file.Open()
-				if err != nil {
-					util.Panic(3002, "用户上传的文件打开失败：" + err.Error())
-				}
-				_, err = io.Copy(part, f)
-				if err != nil {
-					util.Panic(3002, "文件转字节传递异常：" + err.Error())
-				}
-				f.Close()
-			}
-		}
-		*/
-
-		for key, values := range r.MultipartForm.Value {
-			for _, value := range values {
-				w.WriteField(key, value)
-			}
-		}
-
-		return bytes.NewReader(buffer.Bytes())
+func (p *DownstreamProxyService) verifyRequest(r *http.Request) {
+	log.Printf("DownstreamProxyService")
+	if strings.ToUpper(r.Method) != strings.ToUpper(http.MethodGet) {
+		util.Panic(1015, "目前此类请求不支持此种method。")
 	}
-	return nil
+}
+
+func (p *UpstreamProxyService) verifyRequest(r *http.Request) {
+	log.Printf("UpstreamProxyService")
+	//panic("我故意的")
+	if strings.ToUpper(r.Method) != strings.ToUpper(http.MethodPost) && strings.ToUpper(r.Method) != strings.ToUpper(http.MethodPut) {
+		util.Panic(1015, "目前此类请求不支持此种method。")
+	}
+	if !strings.Contains(strings.ToLower(r.Header.Get("Content-Type")), "multipart/form-data") {
+		util.Panic(1016, "上传文件的请求content-type必须是multipart/form-data。")
+	}
 }
 
 func Create(serviceType string) ProxyService {
@@ -213,27 +135,25 @@ func Create(serviceType string) ProxyService {
 	proxyService := new(BaseProxyService)
 	proxyService.free = free
 	proxyService.cache = cache
+	proxyService.serviceType = sType
 
 	var p ProxyService
-
 	switch sType {
-	case "Text":
+	case text:
 		p = &TextProxyService{proxyService}
 		break
-	case "Image":
+	case image:
 		p = &ImageProxyService{proxyService}
 		break
-	case "Upload":
+	case upstream:
 		p = &UpstreamProxyService{proxyService}
 		break
-	case "Download":
+	case downstream:
 		p = &DownstreamProxyService{proxyService}
 		break
 	default:
 		util.Panic(3002, "no support proxy type!")
 	}
-
 	proxyService.ProxyService = p
-
 	return p
 }
