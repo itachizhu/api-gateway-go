@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"strings"
 	"io/ioutil"
+	"net/url"
 )
 
 type ProxyRequestBuilder interface {
@@ -120,7 +121,12 @@ func (p *UpstreamProxyRequestBuilder) makeRequestBody() (io.Reader, string) {
 		for key, values := range p.request.MultipartForm.Value {
 			for _, value := range values {
 				w.CreateFormField(key)
-				w.WriteField(key, value)
+				decodeValue, err := url.QueryUnescape(value)
+				if err != nil {
+					w.WriteField(key, value)
+				} else {
+					w.WriteField(key, decodeValue)
+				}
 			}
 		}
 		err := w.Close()
