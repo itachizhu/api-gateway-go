@@ -22,3 +22,12 @@ func isHopByHopHeader(header string) bool {
 	}
 	return false
 }
+
+func contains(s []string, e string) bool {
+	for _, value := range s {
+		if e == value {
+			return true
+		}
+	}
+	return false
+}

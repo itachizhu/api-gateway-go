@@ -19,7 +19,7 @@ const (
 
 type ProxyService interface {
 	verifyRequest(r *http.Request)
-	Proxy(proxyType string, appName string, r *http.Request) (*http.Response, int32)
+	Proxy(proxyType string, appName string, r *http.Request) (code int, headers map[string][]string, body []byte)
 }
 
 type BaseProxyService struct {
@@ -46,11 +46,16 @@ type UpstreamProxyService struct {
 	*BaseProxyService
 }
 
-func (p *BaseProxyService) Proxy(proxyType string, appName string, r *http.Request) (*http.Response, int32) {
+func (p *BaseProxyService) Proxy(proxyType string, appName string, r *http.Request) (code int, headers map[string][]string, body []byte) {
 	p.ProxyService.verifyRequest(r)
 	p.formatUri(appName, strings.Replace(r.URL.Path, "/mcloud/mag/"+proxyType, "", 1))
 	p.verify(r)
-	p.fromCache(r)
+	if p.cache {
+		_code, _headers, _body := p.fromCache()
+		if _code > 0 && _body != nil {
+			return _code, _headers, _body
+		}
+	}
 	request := p.makeRequest(r)
 	//defer request.Body.Close()
 	defer func() {
@@ -62,7 +67,14 @@ func (p *BaseProxyService) Proxy(proxyType string, appName string, r *http.Reque
 	if err != nil {
 		util.Panic(3002, "转发请求失败:"+err.Error())
 	}
-	return response, p.service.NeedHeaders
+	code, headers, body = CreateResponse(p.serviceType).SetResponse(response).SetNeedHeaders(1 == p.service.NeedHeaders).Build()
+	if p.cache {
+		cache := NewCache(p.serviceType, code, headers, body, p.service)
+		if cache != nil {
+			go cache.Cache()
+		}
+	}
+	return
 }
 
 func (p *BaseProxyService) makeRequest(r *http.Request) *http.Request {
@@ -97,8 +109,13 @@ func (p *BaseProxyService) verify(r *http.Request) {
 	log.Printf("BaseProxyService.verify")
 }
 
-func (p *BaseProxyService) fromCache(r *http.Request) {
+func (p *BaseProxyService) fromCache() (code int, headers map[string][]string, body []byte) {
 	log.Printf("BaseProxyService.fromCache")
+	cache := NewCache(p.serviceType, 0, nil, nil, p.service)
+	if cache != nil {
+		return cache.FromCache()
+	}
+	return 0, nil, nil
 }
 
 func (p *ImageProxyService) verifyRequest(r *http.Request) {
