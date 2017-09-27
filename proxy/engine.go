@@ -62,7 +62,10 @@ func (engine *Engine) handleHTTPRequest() {
 		return
 	}
 	code, headers, body := domain.Create(paths[3]).Proxy(paths[3], paths[4], engine.request)
-	engine.writer.WriteHeader(code)
+	log.Printf("====status code: %v", code)
+	if code != http.StatusOK {
+		engine.writer.WriteHeader(code)
+	}
 	for key, value := range headers {
 		for _, v := range value {
 			if strings.TrimSpace(strings.ToLower(key)) == "content-type" {
@@ -72,6 +75,14 @@ func (engine *Engine) handleHTTPRequest() {
 			}
 		}
 	}
+	//engine.writer.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	//engine.writer.Header().Set("Content-Type", "application/octet-stream")
+	//engine.writer.Header().Set("Content-Disposition", "attachment; filename=attachment.txt")
+	//engine.writer.Header().Set("Content-Disposition", "form-data; name=\"attachment\"; filename=\"attachment.txt\"")
+	for key, values := range engine.writer.Header() {
+		log.Printf("%v : %v", key, values)
+	}
+	//engine.writer.Write([]byte("Hello World"))
 	engine.writer.Write(body)
 }
 
